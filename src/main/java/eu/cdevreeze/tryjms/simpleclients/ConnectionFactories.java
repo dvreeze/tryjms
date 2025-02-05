@@ -32,7 +32,7 @@ public class ConnectionFactories {
 
     public static ConnectionFactory newConnectionFactory() {
         try {
-            JmsFactoryFactory ff = JmsFactoryFactory.getInstance("com.ibm.msg.client.jakarta.wmq");
+            JmsFactoryFactory ff = JmsFactoryFactory.getInstance(WMQConstants.JAKARTA_WMQ_PROVIDER);
             JmsConnectionFactory cf = ff.createConnectionFactory();
             cf.setStringProperty(WMQConstants.WMQ_HOST_NAME, System.getProperty("hostName", "localhost"));
             cf.setIntProperty(WMQConstants.WMQ_PORT, Integer.parseInt(System.getProperty("port", "1414")));
