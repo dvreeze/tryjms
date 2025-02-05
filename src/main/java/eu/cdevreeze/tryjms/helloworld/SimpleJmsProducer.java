@@ -37,15 +37,18 @@ public class SimpleJmsProducer {
 
         ConnectionFactory cf = ConnectionFactories.newConnectionFactory();
 
-        messages.forEach(msg -> sendMessage(msg, QUEUE_NAME, cf));
+        sendMessages(messages, QUEUE_NAME, cf);
     }
 
-    public static void sendMessage(String messageText, String queueName, ConnectionFactory connectionFactory) {
+    public static void sendMessages(List<String> messageTexts, String queueName, ConnectionFactory connectionFactory) {
         try (JMSContext jmsContext = connectionFactory.createContext()) {
             JMSProducer jmsProducer = jmsContext.createProducer();
             Destination destination = jmsContext.createQueue(queueName);
-            TextMessage message = jmsContext.createTextMessage(messageText);
-            jmsProducer.send(destination, message);
+
+            for (var messageText : messageTexts) {
+                TextMessage message = jmsContext.createTextMessage(messageText);
+                jmsProducer.send(destination, message);
+            }
         }
     }
 }
