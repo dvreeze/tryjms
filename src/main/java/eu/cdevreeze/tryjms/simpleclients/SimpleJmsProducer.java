@@ -14,35 +14,41 @@
  * limitations under the License.
  */
 
-package eu.cdevreeze.tryjms.helloworld;
+package eu.cdevreeze.tryjms.simpleclients;
 
-import jakarta.jms.ConnectionFactory;
-import jakarta.jms.Destination;
-import jakarta.jms.JMSConsumer;
-import jakarta.jms.JMSContext;
+import jakarta.jms.*;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
 
 /**
- * Simple JMS message consumer, as program.
+ * Simple JMS message producer, as program.
  *
  * @author Chris de Vreeze
  */
-public class SimpleJmsConsumer {
+public class SimpleJmsProducer {
 
     private static final String QUEUE_NAME = System.getProperty("queue", "DEV.QUEUE.1");
-    private static final long TIMEOUT = Long.parseLong(System.getProperty("timeout", "5000"));
 
     public static void main(String[] args) {
+        Objects.checkIndex(0, args.length);
+        List<String> messages = Arrays.stream(args).toList();
+
         ConnectionFactory cf = ConnectionFactories.newConnectionFactory();
 
-        String nextMessage = receiveNextMessage(QUEUE_NAME, cf);
-        System.out.println(nextMessage);
+        sendMessages(messages, QUEUE_NAME, cf);
     }
 
-    public static String receiveNextMessage(String queueName, ConnectionFactory connectionFactory) {
+    public static void sendMessages(List<String> messageTexts, String queueName, ConnectionFactory connectionFactory) {
         try (JMSContext jmsContext = connectionFactory.createContext()) {
+            JMSProducer jmsProducer = jmsContext.createProducer();
             Destination destination = jmsContext.createQueue(queueName);
-            JMSConsumer jmsConsumer = jmsContext.createConsumer(destination);
-            return jmsConsumer.receiveBody(String.class, TIMEOUT);
+
+            for (var messageText : messageTexts) {
+                TextMessage message = jmsContext.createTextMessage(messageText);
+                jmsProducer.send(destination, message);
+            }
         }
     }
 }
