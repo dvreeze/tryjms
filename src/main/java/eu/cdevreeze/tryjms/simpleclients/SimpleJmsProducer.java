@@ -42,12 +42,12 @@ public class SimpleJmsProducer {
 
     public static void sendMessages(List<String> messageTexts, String queueName, ConnectionFactory connectionFactory) {
         try (JMSContext jmsContext = connectionFactory.createContext()) {
+            Queue queue = jmsContext.createQueue(queueName);
             JMSProducer jmsProducer = jmsContext.createProducer();
-            Destination destination = jmsContext.createQueue(queueName);
 
             for (var messageText : messageTexts) {
                 TextMessage message = jmsContext.createTextMessage(messageText);
-                jmsProducer.send(destination, message);
+                jmsProducer.send(queue, message);
             }
         }
     }

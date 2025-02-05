@@ -17,7 +17,6 @@
 package eu.cdevreeze.tryjms.simpleclients;
 
 import jakarta.jms.ConnectionFactory;
-import jakarta.jms.Destination;
 import jakarta.jms.JMSConsumer;
 import jakarta.jms.JMSContext;
 
@@ -39,9 +38,8 @@ public class SimpleJmsConsumer {
     }
 
     public static String receiveNextMessage(String queueName, ConnectionFactory connectionFactory) {
-        try (JMSContext jmsContext = connectionFactory.createContext()) {
-            Destination destination = jmsContext.createQueue(queueName);
-            JMSConsumer jmsConsumer = jmsContext.createConsumer(destination);
+        try (JMSContext jmsContext = connectionFactory.createContext();
+             JMSConsumer jmsConsumer = jmsContext.createConsumer(jmsContext.createQueue(queueName))) {
             return jmsConsumer.receiveBody(String.class, TIMEOUT);
         }
     }
