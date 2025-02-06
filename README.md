@@ -13,7 +13,8 @@ docker pull icr.io/ibm-messaging/mq:latest
 
 docker volume create qm1data
 
-docker run --env LICENSE=accept \
+docker run \
+  --env LICENSE=accept \
   --env MQ_QMGR_NAME=QM1 \
   --volume qm1data:/mnt/mqm \
   --publish 1414:1414 \
