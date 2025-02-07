@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-package eu.cdevreeze.tryjms.simpleclients;
+package eu.cdevreeze.tryjms.reseller;
 
+import eu.cdevreeze.tryjms.simpleclients.ConnectionFactories;
 import eu.cdevreeze.yaidom4j.dom.immutabledom.Element;
 import eu.cdevreeze.yaidom4j.dom.immutabledom.jaxpinterop.DocumentParser;
 import eu.cdevreeze.yaidom4j.dom.immutabledom.jaxpinterop.DocumentParsers;
