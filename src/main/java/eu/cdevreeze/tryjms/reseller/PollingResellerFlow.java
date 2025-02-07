@@ -35,13 +35,13 @@ import java.util.logging.LogManager;
 import java.util.logging.Logger;
 
 /**
- * Reseller JMS flow, communicating with the event booking service.
+ * Reseller JMS flow, communicating with the event booking service. It uses polling.
  * <p>
  * See <a href="https://developer.ibm.com/learningpaths/ibm-mq-badge/mq-coding-challenge/">mq-coding-challenge</a>.
  *
  * @author Chris de Vreeze
  */
-public class ResellerFlow {
+public class PollingResellerFlow {
 
     private static final Logger logger = LogManager.getLogManager().getLogger(Logger.GLOBAL_LOGGER_NAME);
 
