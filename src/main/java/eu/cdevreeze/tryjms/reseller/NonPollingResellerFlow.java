@@ -61,27 +61,27 @@ public class NonPollingResellerFlow {
     }
 
     private static List<Element> retrieveEvents(ConnectionFactory cf) {
-        ImmutableList<Element> results = ImmutableList.of();
+        AtomicReference<ImmutableList<Element>> elements =
+                new AtomicReference<>(ImmutableList.of());
 
         try (JMSContext jmsContext = cf.createContext();
              JMSConsumer jmsConsumer = jmsContext.createConsumer(jmsContext.createTopic(NEW_TICKETS_TOPIC))) {
 
             logger.info("main - current thread: " + Thread.currentThread());
 
-            EventMessageListener messageListener = new EventMessageListener();
+            EventMessageListener messageListener = new EventMessageListener(elements);
             jmsConsumer.setMessageListener(messageListener);
 
             Thread.sleep(TIMEOUT); // Improve!
-            results = messageListener.elements.get();
 
             logger.info("main - current thread: " + Thread.currentThread());
 
-            return results;
+            return elements.get();
         } catch (InterruptedException e) {
-            return results;
+            return elements.get();
         } catch (JMSRuntimeException e) {
             logger.info("Thrown (ignored) exception: " + e);
-            return results;
+            return elements.get();
         }
     }
 
@@ -90,8 +90,11 @@ public class NonPollingResellerFlow {
         private final DocumentParser docParser =
                 DocumentParsers.builder().removingInterElementWhitespace().build();
 
-        private final AtomicReference<ImmutableList<Element>> elements =
-                new AtomicReference<>(ImmutableList.of());
+        private final AtomicReference<ImmutableList<Element>> elements;
+
+        public EventMessageListener(AtomicReference<ImmutableList<Element>> elements) {
+            this.elements = elements;
+        }
 
         @Override
         public void onMessage(Message message) {
