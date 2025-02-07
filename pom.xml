@@ -25,6 +25,11 @@
             <artifactId>jakarta.jakartaee-api</artifactId>
             <version>10.0.0</version>
         </dependency>
+        <dependency>
+            <groupId>eu.cdevreeze.yaidom4j</groupId>
+            <artifactId>yaidom4j</artifactId>
+            <version>0.11.0</version>
+        </dependency>
         <!-- Runtime dependencies -->
         <dependency>
             <groupId>com.ibm.mq</groupId>
