@@ -61,7 +61,7 @@ public class ResellerFlow {
     private static List<Element> retrieveEvents(ConnectionFactory cf) {
         List<Element> results = new ArrayList<>();
 
-        DocumentParser docParser = DocumentParsers.instance();
+        DocumentParser docParser = DocumentParsers.builder().removingInterElementWhitespace().build();
 
         try (JMSContext jmsContext = cf.createContext();
              JMSConsumer jmsConsumer = jmsContext.createConsumer(jmsContext.createTopic(NEW_TICKETS_TOPIC))) {
