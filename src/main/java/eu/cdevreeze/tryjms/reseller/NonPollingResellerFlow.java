@@ -198,8 +198,6 @@ public class NonPollingResellerFlow {
             jmsConsumer.setMessageListener(messageListener);
 
             countDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
-        } catch (JMSRuntimeException e) {
-            logger.info("Thrown (ignored) JMS unchecked exception: " + e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
@@ -220,8 +218,6 @@ public class NonPollingResellerFlow {
             jmsConsumer.setMessageListener(messageListener);
 
             countDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
-        } catch (JMSRuntimeException e) {
-            logger.info("Thrown (ignored) JMS unchecked exception: " + e);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
@@ -278,7 +274,7 @@ public class NonPollingResellerFlow {
 
             jmsProducer.send(purchaseQueue, message);
         } catch (JMSException e) {
-            throw new RuntimeException(e);
+            throw new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
         }
     }
 
