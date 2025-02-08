@@ -29,9 +29,10 @@ import eu.cdevreeze.yaidom4j.dom.immutabledom.jaxpinterop.DocumentPrinters;
 import jakarta.jms.*;
 import org.xml.sax.InputSource;
 
-import java.io.Console;
 import java.io.StringReader;
-import java.util.Objects;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Scanner;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -184,6 +185,8 @@ public class NonPollingResellerFlow {
         }
     }
 
+    // I should add an exception handler to the connection
+
     private static void startEventMessageListener(
             ConnectionFactory cf,
             CountDownLatch countDownLatch,
@@ -195,7 +198,7 @@ public class NonPollingResellerFlow {
             logger.info("listenForTickets - current thread: " + Thread.currentThread());
 
             EventMessageListener messageListener =
-                    new EventMessageListener(cf, countDownLatch, ticketRequestsByCorrelationId);
+                    new EventMessageListener(jmsContext, countDownLatch, ticketRequestsByCorrelationId);
             jmsConsumer.setMessageListener(messageListener);
 
             countDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
@@ -228,39 +231,43 @@ public class NonPollingResellerFlow {
 
     private static void handleEvent(
             Event event,
-            ConnectionFactory cf,
+            JMSContext jmsContext,
             ConcurrentMap<UUID, TicketsRequest> ticketRequestsByCorrelationId
     ) throws InterruptedException {
         TicketsRequest eventTicketCount = askForTicketCount(event);
-        buyTickets(eventTicketCount, cf, ticketRequestsByCorrelationId);
+        buyTickets(eventTicketCount, jmsContext, ticketRequestsByCorrelationId);
     }
 
     private static TicketsRequest askForTicketCount(Event event) {
-        Console console = Objects.requireNonNull(System.console());
-        console.printf("Event:%n");
-        console.printf("%s%n", docPrinter.print(event.toXmlElement()));
-        console.printf("There are %d tickets available for %s.%n", event.capacity, event.title);
-        console.printf("How many tickets do you want to secure for this event? ");
+        // Often System.console() returns null, so we have to work around that
+        System.out.printf("Event:%n");
+        System.out.printf("%s%n", docPrinter.print(event.toXmlElement()));
+        System.out.printf("There are %d tickets available for %s.%n", event.capacity, event.title);
+        System.out.print("How many tickets do you want to secure for this event? ");
+        System.out.flush();
         // Blocking wait for user input. Do not wait too long to answer, or else the server may be down!
-        int numberOfTickets = Integer.parseInt(console.readLine());
-        return new TicketsRequest(
-                event.eventID,
-                event.title,
-                event.date,
-                event.time,
-                event.location,
-                numberOfTickets
-        );
+        try (Scanner scanner = new Scanner(System.in)) {
+            int defaultTicketCount = 10;
+            int numberOfTickets = scanner.hasNextInt() ? scanner.nextInt() : defaultTicketCount;
+            return new TicketsRequest(
+                    event.eventID,
+                    event.title,
+                    event.date,
+                    event.time,
+                    event.location,
+                    numberOfTickets
+            );
+        }
     }
 
     private static void buyTickets(
             TicketsRequest ticketsRequest,
-            ConnectionFactory cf,
+            JMSContext jmsContext,
             ConcurrentMap<UUID, TicketsRequest> ticketRequestsByCorrelationId
     ) {
         logger.info("buyTickets - current thread: " + Thread.currentThread());
 
-        try (JMSContext jmsContext = cf.createContext()) {
+        try {
             JMSProducer jmsProducer = jmsContext.createProducer();
             Queue purchaseQueue = jmsContext.createQueue(PURCHASE_QUEUE);
             Queue confirmationQueue = jmsContext.createQueue(CONFIRMATION_QUEUE);
@@ -271,9 +278,11 @@ public class NonPollingResellerFlow {
             message.setJMSReplyTo(confirmationQueue);
             UUID uuid = UUID.randomUUID();
             message.setJMSCorrelationID(uuid.toString());
-            message.setJMSExpiration(15L * 60 * 10000);
+            message.setJMSExpiration(Instant.now().plus(15, ChronoUnit.MINUTES).toEpochMilli());
 
             ticketRequestsByCorrelationId.put(uuid, ticketsRequest);
+
+            logger.info("Complete message to send: " + message);
 
             jmsProducer.send(purchaseQueue, message);
         } catch (JMSException e) {
@@ -287,16 +296,16 @@ public class NonPollingResellerFlow {
         private final DocumentParser docParser =
                 DocumentParsers.builder().removingInterElementWhitespace().build();
 
-        private final ConnectionFactory cf;
+        private final JMSContext jmsContext;
         private final CountDownLatch countDownLatch;
         private final ConcurrentMap<UUID, TicketsRequest> ticketRequestsByCorrelationId;
         private final AtomicInteger eventCounter = new AtomicInteger(0);
 
         public EventMessageListener(
-                ConnectionFactory cf,
+                JMSContext jmsContext,
                 CountDownLatch countDownLatch,
                 ConcurrentMap<UUID, TicketsRequest> ticketRequestsByCorrelationId) {
-            this.cf = cf;
+            this.jmsContext = jmsContext;
             this.countDownLatch = countDownLatch;
             this.ticketRequestsByCorrelationId = ticketRequestsByCorrelationId;
         }
@@ -316,7 +325,7 @@ public class NonPollingResellerFlow {
                         Element element = docParser.parse(new InputSource(new StringReader(xmlMessage)))
                                 .documentElement();
 
-                        handleEvent(Event.fromXmlElement(element), cf, ticketRequestsByCorrelationId);
+                        handleEvent(Event.fromXmlElement(element), jmsContext, ticketRequestsByCorrelationId);
 
                         if (nextEventCounter >= MAX_NUMBER_OF_EVENTS) {
                             countDownLatch.countDown();
@@ -359,26 +368,30 @@ public class NonPollingResellerFlow {
                         int nextEventCounter = confirmationCounter.incrementAndGet();
                         String msg = textMessage.getText();
                         logger.info("Received message: " + msg);
-                        logger.info("Complete message" + textMessage);
+                        logger.info("Complete message: " + textMessage);
                         Confirmation confirmation = Confirmation.fromString(msg);
 
                         UUID uuid = UUID.fromString(textMessage.getJMSCorrelationID());
                         TicketsRequest ticketsRequest =
-                                Objects.requireNonNull(ticketRequestsByCorrelationId.get(uuid));
+                                ticketRequestsByCorrelationId.get(uuid);
 
-                        System.out.printf(
-                                "%s (event ID %d; event title: %s)%n",
-                                confirmation,
-                                ticketsRequest.eventID(),
-                                ticketsRequest.title());
-
-                        if (confirmation == Confirmation.Accepted) {
+                        if (ticketsRequest == null) {
+                            System.out.println("Could not find ticket request for correlation ID " + uuid);
+                        } else {
                             System.out.printf(
-                                    "%d tickets secured for event '%s' (event ID %d)!%n",
-                                    ticketsRequest.numberRequested(),
-                                    ticketsRequest.title(),
-                                    ticketsRequest.eventID()
-                            );
+                                    "%s (event ID %d; event title: %s)%n",
+                                    confirmation,
+                                    ticketsRequest.eventID(),
+                                    ticketsRequest.title());
+
+                            if (confirmation == Confirmation.Accepted) {
+                                System.out.printf(
+                                        "%d tickets secured for event '%s' (event ID %d)!%n",
+                                        ticketsRequest.numberRequested(),
+                                        ticketsRequest.title(),
+                                        ticketsRequest.eventID()
+                                );
+                            }
                         }
 
                         if (nextEventCounter >= MAX_NUMBER_OF_CONFIRMATIONS) {
