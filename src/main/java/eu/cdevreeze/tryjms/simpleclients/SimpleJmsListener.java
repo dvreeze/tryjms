@@ -85,7 +85,6 @@ public class SimpleJmsListener {
         public void onMessage(Message message) {
             logger.info("Receiving message. Current thread: " + Thread.currentThread());
 
-            // This is important, because otherwise a message is auto-acknowledged without being returned in the message collection
             if (countDownLatch.getCount() >= 1) {
                 logger.info("Acknowledging message. Current thread: " + Thread.currentThread());
 
