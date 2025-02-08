@@ -179,6 +179,7 @@ public class NonPollingResellerFlow {
         try {
             confirmationsCountDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
+            logger.info("Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         }
     }
@@ -199,6 +200,7 @@ public class NonPollingResellerFlow {
 
             countDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
+            logger.info("Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         }
     }
@@ -219,6 +221,7 @@ public class NonPollingResellerFlow {
 
             countDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
+            logger.info("Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         }
     }
@@ -274,6 +277,7 @@ public class NonPollingResellerFlow {
 
             jmsProducer.send(purchaseQueue, message);
         } catch (JMSException e) {
+            logger.info("Throwing exception (wrapped in JMSRuntimeException): " + e);
             throw new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
         }
     }
@@ -320,8 +324,10 @@ public class NonPollingResellerFlow {
                     }
                 }
             } catch (InterruptedException e) {
+                logger.info("Throwing exception (wrapped in RuntimeException): " + e);
                 throw new RuntimeException(e);
             } catch (JMSException e) {
+                logger.info("Throwing exception (wrapped in JMSRuntimeException): " + e);
                 throw new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
             }
         }
@@ -381,6 +387,7 @@ public class NonPollingResellerFlow {
                     }
                 }
             } catch (JMSException e) {
+                logger.info("Throwing exception (wrapped in JMSRuntimeException): " + e);
                 throw new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
             }
         }
