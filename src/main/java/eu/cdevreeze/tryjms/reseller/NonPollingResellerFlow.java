@@ -58,12 +58,25 @@ import java.util.logging.Logger;
  * listener's `onMessage` method runs in yet another thread (under the control of JMS).
  * <p>
  * Thirdly, "internal messaging" between threads can be accomplished using a `BlockingQueue` (with
- * blocking methods `put` in one thread and `take` in the other thread).
+ * blocking methods `put` being called in one thread and `take` in the other thread).
+ * <p>
+ * Fourthly, it uses a `CountDownLatch` *to keep threads alive long enough, but no longer*. One thread
+ * calls method `countDown` (from 1 to 0), and the blocked threads that called method `await` on that
+ * `CountDownLatch` are thus "woken up", causing them to proceed, which typically means finishing the task
+ * they were running.
  * <p>
  * Be careful with `Future` (and `CompletableFuture`), though. On creation, they may or may not immediately
- * start to run. It is not like purely functional *functional effects* like ZIO effects which are purely
- * lazy and functional, and which can be combined into a *result effect* without running anything
- * (until some "unsafe run" method is called to run the entire result effect).
+ * start to run. It is not like purely *functional effects* like ZIO effects which are purely
+ * lazy and functional (i.e. code as an *immutable value*), and which can be combined into a *result effect*
+ * without running anything (until some "unsafe run" method is called to run the entire result effect).
+ * <p>
+ * Note that in this program at least the following threads occur:
+ * <ul>
+ * <li>The "main" thread that invokes method `main`</li>>
+ * <li>Two threads for the `CompletableFuture` instances that trigger listening for JMS messages, one thread for events and one thread for confirmations</li>>
+ * <li>The corresponding JMS-controlled threads for the `MessageListener` instances, running the `onMessage` method</li>>
+ * <li>One thread for the `CompletableFuture` instance that takes events from the blocking queue (filled by the `onMessage` call consuming events)</li>
+ * </ul>
  *
  * @author Chris de Vreeze
  */
