@@ -99,6 +99,7 @@ public class NonPollingResellerFlow {
         // It guarantees that per submitted task only 1 worker thread will be used.
         ExecutorService executor1 = Executors.newSingleThreadExecutor();
         ExecutorService executor2 = Executors.newSingleThreadExecutor();
+        ExecutorService executor3 = Executors.newSingleThreadExecutor();
 
         CountDownLatch eventsCountDownLatch = new CountDownLatch(1);
 
@@ -116,17 +117,20 @@ public class NonPollingResellerFlow {
                 executor2
         );
 
-        // In main thread, to have console interaction only in main thread
-        startHandlingEvents(cf, ticketRequestsByCorrelationId);
+        CompletableFuture<Void> processEventsFuture = CompletableFuture.runAsync(
+                () -> startHandlingEvents(cf, ticketRequestsByCorrelationId),
+                executor3
+        );
 
         // Initiate orderly shutdown, without blocking this thread, and without killing previously submitted tasks
         executor1.shutdown();
         executor2.shutdown();
+        executor3.shutdown();
 
         logger.log(logLevel, "main - current thread: " + Thread.currentThread());
 
         try {
-            CompletableFuture.allOf(eventListenerFuture, confirmationListenerFuture)
+            CompletableFuture.allOf(eventListenerFuture, confirmationListenerFuture, processEventsFuture)
                     .get(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
 
             logger.log(logLevel, "main - current thread: " + Thread.currentThread());
@@ -225,7 +229,6 @@ public class NonPollingResellerFlow {
     }
 
     private static TicketsRequest askForTicketCount(Event event) {
-        // Often System.console() returns null, so we have to work around that
         Console console = Objects.requireNonNull(System.console());
         console.printf("Event:%n");
         console.printf("%s%n", docPrinter.print(event.toXmlElement()));
