@@ -34,10 +34,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Scanner;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
@@ -167,25 +164,48 @@ public class NonPollingResellerFlow {
     public static void main(String[] args) {
         ConnectionFactory cf = ConnectionFactories.newConnectionFactory();
 
+        logger.info("main - current thread: " + Thread.currentThread());
+
+        // Single-threaded, which is what we want for threads operating in a JMSContext
+        ExecutorService executor1 = Executors.newSingleThreadExecutor();
+        ExecutorService executor2 = Executors.newSingleThreadExecutor();
+
         CountDownLatch eventsCountDownLatch = new CountDownLatch(1);
 
         ConcurrentMap<UUID, TicketsRequest> ticketRequestsByCorrelationId = new ConcurrentHashMap<>();
 
-        startEventMessageListener(cf, eventsCountDownLatch, ticketRequestsByCorrelationId);
+        CompletableFuture<Void> eventListenerFuture = CompletableFuture.runAsync(
+                () -> startEventMessageListener(cf, eventsCountDownLatch, ticketRequestsByCorrelationId),
+                executor1
+        );
 
         CountDownLatch confirmationsCountDownLatch = new CountDownLatch(1);
 
-        startConfirmationMessageListener(cf, confirmationsCountDownLatch, ticketRequestsByCorrelationId);
+        CompletableFuture<Void> confirmationListenerFuture = CompletableFuture.runAsync(
+                () -> startConfirmationMessageListener(cf, confirmationsCountDownLatch, ticketRequestsByCorrelationId),
+                executor2
+        );
+
+        executor1.shutdown();
+        executor2.shutdown();
+
+        logger.info("main - current thread: " + Thread.currentThread());
 
         try {
+            CompletableFuture.allOf(eventListenerFuture, confirmationListenerFuture)
+                    .get(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
+
+            logger.info("main - current thread: " + Thread.currentThread());
+
             confirmationsCountDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
+        } catch (InterruptedException | ExecutionException | TimeoutException e) {
             logger.info("Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         }
     }
 
     // I should add an exception handler to the connection
+    // Also see https://jakarta.ee/specifications/messaging/3.1/jakarta-messaging-spec-3.1#receiving-messages-asynchronously
 
     private static void startEventMessageListener(
             ConnectionFactory cf,
@@ -358,6 +378,12 @@ public class NonPollingResellerFlow {
 
         @Override
         public void onMessage(Message message) {
+            try {
+                Thread.sleep(15L * 1000); // Hack to try to avoid interference with the console
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+
             try {
                 logger.info("ConfirmationMessageListener.onMessage - current thread: " + Thread.currentThread());
 
