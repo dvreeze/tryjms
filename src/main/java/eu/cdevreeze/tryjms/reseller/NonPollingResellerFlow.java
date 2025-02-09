@@ -16,12 +16,8 @@
 
 package eu.cdevreeze.tryjms.reseller;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import eu.cdevreeze.tryjms.simpleclients.ConnectionFactories;
-import eu.cdevreeze.yaidom4j.core.NamespaceScope;
 import eu.cdevreeze.yaidom4j.dom.immutabledom.Element;
-import eu.cdevreeze.yaidom4j.dom.immutabledom.NodeBuilder.ConciseApi;
 import eu.cdevreeze.yaidom4j.dom.immutabledom.jaxpinterop.DocumentParser;
 import eu.cdevreeze.yaidom4j.dom.immutabledom.jaxpinterop.DocumentParsers;
 import eu.cdevreeze.yaidom4j.dom.immutabledom.jaxpinterop.DocumentPrinter;
@@ -29,127 +25,53 @@ import eu.cdevreeze.yaidom4j.dom.immutabledom.jaxpinterop.DocumentPrinters;
 import jakarta.jms.*;
 import org.xml.sax.InputSource;
 
+import java.io.Console;
 import java.io.StringReader;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Scanner;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
-
-import static eu.cdevreeze.yaidom4j.dom.immutabledom.ElementPredicates.hasName;
 
 /**
  * Reseller JMS flow, communicating with the event booking service. It uses MessageListener instances
  * instead of polling.
  * <p>
  * See <a href="https://developer.ibm.com/learningpaths/ibm-mq-badge/mq-coding-challenge/">mq-coding-challenge</a>.
+ * <p>
+ * Run this program outside the IDE (such as IntelliJ), in order to have a console! For example:
+ * <pre>
+ * mvn compile exec:java -Dexec.mainClass="eu.cdevreeze.tryjms.reseller.NonPollingResellerFlow"
+ * </pre>
+ * <p>
+ * This program uses several techniques in its implementation. First of all, it uses `CompletableFuture`,
+ * so it uses the combination of `Future` and `CompletionStage`, where the latter API helps in composing
+ * asynchronous tasks.
+ * <p>
+ * Secondly, it uses method `CompletableFuture.runAsync`, passing a *single-threaded* `ExecutorService`
+ * as second function argument for JMS client code, which is required to be single-threaded. Often,
+ * these tasks may create and attach a JMS `MessageListener` to a `JMSConsumer`, where the message
+ * listener's `onMessage` method runs in yet another thread (under the control of JMS).
+ * <p>
+ * Thirdly, "internal messaging" between threads can be accomplished using a `BlockingQueue` (with
+ * blocking methods `put` in one thread and `take` in the other thread).
+ * <p>
+ * Be careful with `Future` (and `CompletableFuture`), though. On creation, they may or may not immediately
+ * start to run. It is not like purely functional *functional effects* like ZIO effects which are purely
+ * lazy and functional, and which can be combined into a *result effect* without running anything
+ * (until some "unsafe run" method is called to run the entire result effect).
  *
  * @author Chris de Vreeze
  */
 public class NonPollingResellerFlow {
 
-    public record Event(
-            int eventID,
-            String title,
-            String date,
-            String time,
-            String location,
-            int capacity
-    ) {
-
-        public Element toXmlElement() {
-            ConciseApi api = new ConciseApi(NamespaceScope.empty());
-
-            return api.element(
-                    "Event",
-                    ImmutableMap.of(),
-                    ImmutableList.of(
-                            api.textElement("eventID", String.valueOf(eventID)),
-                            api.textElement("title", title),
-                            api.textElement("date", date),
-                            api.textElement("time", time),
-                            api.textElement("location", location),
-                            api.textElement("capacity", String.valueOf(capacity))
-                    )
-            );
-        }
-
-        public static Event fromXmlElement(Element element) {
-            // Maybe make these similar queries easier in yaidom4j?
-            return new Event(
-                    element.childElementStream(hasName("eventID"))
-                            .map(Element::text)
-                            .mapToInt(Integer::parseInt)
-                            .findFirst()
-                            .orElseThrow(),
-                    element.childElementStream(hasName("title"))
-                            .map(Element::text)
-                            .findFirst()
-                            .orElseThrow(),
-                    element.childElementStream(hasName("date"))
-                            .map(Element::text)
-                            .findFirst()
-                            .orElseThrow(),
-                    element.childElementStream(hasName("time"))
-                            .map(Element::text)
-                            .findFirst()
-                            .orElseThrow(),
-                    element.childElementStream(hasName("location"))
-                            .map(Element::text)
-                            .findFirst()
-                            .orElseThrow(),
-                    element.childElementStream(hasName("capacity"))
-                            .map(Element::text)
-                            .mapToInt(Integer::parseInt)
-                            .findFirst()
-                            .orElseThrow()
-            );
-        }
-    }
-
-    public record TicketsRequest(
-            int eventID,
-            String title,
-            String date,
-            String time,
-            String location,
-            int numberRequested
-    ) {
-
-        public Element toXmlElement() {
-            ConciseApi api = new ConciseApi(NamespaceScope.empty());
-
-            return api.element(
-                    "RequestTickets",
-                    ImmutableMap.of(),
-                    ImmutableList.of(
-                            api.textElement("eventID", String.valueOf(eventID)),
-                            api.textElement("title", title),
-                            api.textElement("date", date),
-                            api.textElement("time", time),
-                            api.textElement("location", location),
-                            api.textElement("numberRequested", String.valueOf(numberRequested))
-                    )
-            );
-        }
-    }
-
-    public enum Confirmation {
-        Accepted, Rejected;
-
-        public static Confirmation fromString(String s) {
-            return switch (s) {
-                case "Accepted" -> Accepted;
-                case "Rejected" -> Rejected;
-                default -> throw new RuntimeException("Not a confirmation: " + s);
-            };
-        }
-    }
-
     private static final Logger logger = LogManager.getLogManager().getLogger(Logger.GLOBAL_LOGGER_NAME);
+    private static final boolean infoLogging = Boolean.parseBoolean(System.getProperty("infoLogging", "true"));
+    private static final Level logLevel = infoLogging ? Level.INFO : Level.FINEST;
 
     private static final DocumentPrinter docPrinter = DocumentPrinters.instance();
 
@@ -165,15 +87,18 @@ public class NonPollingResellerFlow {
 
     private static final Event NULL_EVENT = new Event(-1, "", "", "", "", 0);
 
+    private NonPollingResellerFlow() {
+    }
+
     public static void main(String[] args) {
         ConnectionFactory cf = ConnectionFactories.newConnectionFactory();
 
-        logger.info("main - current thread: " + Thread.currentThread());
+        logger.log(logLevel, "main - current thread: " + Thread.currentThread());
 
-        // Single-threaded, which is what we want for threads operating in a JMSContext
+        // Single-threaded, which is what we want for threads operating in a JMSContext.
+        // It guarantees that per submitted task only 1 worker thread will be used.
         ExecutorService executor1 = Executors.newSingleThreadExecutor();
         ExecutorService executor2 = Executors.newSingleThreadExecutor();
-        ExecutorService executor3 = Executors.newSingleThreadExecutor();
 
         CountDownLatch eventsCountDownLatch = new CountDownLatch(1);
 
@@ -191,26 +116,24 @@ public class NonPollingResellerFlow {
                 executor2
         );
 
-        CompletableFuture<Void> processEventsFuture = CompletableFuture.runAsync(
-                () -> startHandlingEvents(cf, ticketRequestsByCorrelationId),
-                executor3
-        );
+        // In main thread, to have console interaction only in main thread
+        startHandlingEvents(cf, ticketRequestsByCorrelationId);
 
+        // Initiate orderly shutdown, without blocking this thread, and without killing previously submitted tasks
         executor1.shutdown();
         executor2.shutdown();
-        executor3.shutdown();
 
-        logger.info("main - current thread: " + Thread.currentThread());
+        logger.log(logLevel, "main - current thread: " + Thread.currentThread());
 
         try {
-            CompletableFuture.allOf(eventListenerFuture, confirmationListenerFuture, processEventsFuture)
+            CompletableFuture.allOf(eventListenerFuture, confirmationListenerFuture)
                     .get(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
 
-            logger.info("main - current thread: " + Thread.currentThread());
+            logger.log(logLevel, "main - current thread: " + Thread.currentThread());
 
             confirmationsCountDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
         } catch (InterruptedException | ExecutionException | TimeoutException e) {
-            logger.info("Throwing exception (wrapped in RuntimeException): " + e);
+            logger.log(logLevel, "Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         }
     }
@@ -225,14 +148,14 @@ public class NonPollingResellerFlow {
         try (JMSContext jmsContext = cf.createContext(JMSContext.CLIENT_ACKNOWLEDGE);
              JMSConsumer jmsConsumer = jmsContext.createConsumer(jmsContext.createTopic(NEW_TICKETS_TOPIC))) {
 
-            logger.info("listenForTickets - current thread: " + Thread.currentThread());
+            logger.log(logLevel, "listening for tickets - current thread: " + Thread.currentThread());
 
             EventMessageListener messageListener = new EventMessageListener(countDownLatch);
             jmsConsumer.setMessageListener(messageListener);
 
             countDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
-            logger.info("Throwing exception (wrapped in RuntimeException): " + e);
+            logger.log(logLevel, "Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         }
     }
@@ -245,7 +168,7 @@ public class NonPollingResellerFlow {
         try (JMSContext jmsContext = cf.createContext(JMSContext.CLIENT_ACKNOWLEDGE);
              JMSConsumer jmsConsumer = jmsContext.createConsumer(jmsContext.createQueue(CONFIRMATION_QUEUE))) {
 
-            logger.info("listenForConfirmations - current thread: " + Thread.currentThread());
+            logger.log(logLevel, "listening for confirmations - current thread: " + Thread.currentThread());
 
             ConfirmationMessageListener messageListener =
                     new ConfirmationMessageListener(countDownLatch, ticketRequestsByCorrelationId);
@@ -253,7 +176,7 @@ public class NonPollingResellerFlow {
 
             countDownLatch.await(MAX_WAIT_IN_SEC, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
-            logger.info("Throwing exception (wrapped in RuntimeException): " + e);
+            logger.log(logLevel, "Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         }
     }
@@ -262,7 +185,7 @@ public class NonPollingResellerFlow {
             ConnectionFactory cf,
             ConcurrentMap<UUID, TicketsRequest> ticketRequestsByCorrelationId
     ) {
-        logger.info("buyTickets - current thread: " + Thread.currentThread());
+        logger.log(logLevel, "buying tickets - current thread: " + Thread.currentThread());
 
         try (JMSContext jmsContext = cf.createContext()) {
             JMSProducer jmsProducer = jmsContext.createProducer();
@@ -278,7 +201,7 @@ public class NonPollingResellerFlow {
 
                 TicketsRequest ticketsRequest = askForTicketCount(event);
 
-                logger.info("buyTickets (sending message to queue) - current thread: " + Thread.currentThread());
+                logger.log(logLevel, "buying tickets (sending message to queue) - current thread: " + Thread.currentThread());
 
                 Message message = jmsContext.createTextMessage(docPrinter.print(ticketsRequest.toXmlElement()));
                 message.setJMSReplyTo(confirmationQueue);
@@ -288,45 +211,46 @@ public class NonPollingResellerFlow {
 
                 ticketRequestsByCorrelationId.put(uuid, ticketsRequest);
 
-                logger.info("Complete message to send: " + message);
+                logger.log(logLevel, "Complete message to send: " + message);
 
                 jmsProducer.send(purchaseQueue, message);
             }
         } catch (InterruptedException e) {
-            logger.info("Throwing exception (wrapped in RuntimeException): " + e);
+            logger.log(logLevel, "Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         } catch (JMSException e) {
-            logger.info("Throwing exception (wrapped in JMSRuntimeException): " + e);
+            logger.log(logLevel, "Throwing exception (wrapped in JMSRuntimeException): " + e);
             throw new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
         }
     }
 
     private static TicketsRequest askForTicketCount(Event event) {
         // Often System.console() returns null, so we have to work around that
-        System.out.printf("Event:%n");
-        System.out.printf("%s%n", docPrinter.print(event.toXmlElement()));
-        System.out.printf("There are %d tickets available for %s.%n", event.capacity, event.title);
-        System.out.print("How many tickets do you want to secure for this event? ");
-        System.out.flush();
+        Console console = Objects.requireNonNull(System.console());
+        console.printf("Event:%n");
+        console.printf("%s%n", docPrinter.print(event.toXmlElement()));
+        console.printf("There are %d tickets available for %s.%n", event.capacity(), event.title());
+        console.printf("How many tickets do you want to secure for this event? ");
+        console.flush();
+
         // Blocking wait for user input. Do not wait too long to answer, or else the server may be down!
-        try (Scanner scanner = new Scanner(System.in)) {
-            int defaultTicketCount = 10;
-            int numberOfTickets;
-            try {
-                numberOfTickets = Integer.parseInt(scanner.next());
-            } catch (RuntimeException e) {
-                logger.info("Ignoring exception while reading from console: " + e);
-                numberOfTickets = defaultTicketCount;
-            }
-            return new TicketsRequest(
-                    event.eventID,
-                    event.title,
-                    event.date,
-                    event.time,
-                    event.location,
-                    numberOfTickets
-            );
+
+        int defaultTicketCount = 10;
+        int numberOfTickets;
+        try {
+            numberOfTickets = Integer.parseInt(console.readLine());
+        } catch (RuntimeException e) {
+            logger.log(logLevel, "Ignoring exception while reading from console: " + e);
+            numberOfTickets = defaultTicketCount;
         }
+        return new TicketsRequest(
+                event.eventID(),
+                event.title(),
+                event.date(),
+                event.time(),
+                event.location(),
+                numberOfTickets
+        );
     }
 
     public static final class EventMessageListener implements MessageListener {
@@ -344,7 +268,7 @@ public class NonPollingResellerFlow {
         @Override
         public void onMessage(Message message) {
             try {
-                logger.info("EventMessageListener.onMessage - current thread: " + Thread.currentThread());
+                logger.log(logLevel, "EventMessageListener.onMessage - current thread: " + Thread.currentThread());
 
                 if (countDownLatch.getCount() >= 1) {
                     message.acknowledge();
@@ -352,7 +276,7 @@ public class NonPollingResellerFlow {
                     if (message instanceof TextMessage textMessage) {
                         int nextEventCounter = eventCounter.incrementAndGet();
                         String xmlMessage = textMessage.getText();
-                        logger.info("Received message: " + xmlMessage);
+                        logger.log(logLevel, "Received message: " + xmlMessage);
                         Element element = docParser.parse(new InputSource(new StringReader(xmlMessage)))
                                 .documentElement();
                         Event event = Event.fromXmlElement(element);
@@ -366,10 +290,10 @@ public class NonPollingResellerFlow {
                     }
                 }
             } catch (InterruptedException e) {
-                logger.info("Throwing exception (wrapped in RuntimeException): " + e);
+                logger.log(logLevel, "Throwing exception (wrapped in RuntimeException): " + e);
                 throw new RuntimeException(e);
             } catch (JMSException e) {
-                logger.info("Throwing exception (wrapped in JMSRuntimeException): " + e);
+                logger.log(logLevel, "Throwing exception (wrapped in JMSRuntimeException): " + e);
                 throw new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
             }
         }
@@ -392,7 +316,7 @@ public class NonPollingResellerFlow {
         @Override
         public void onMessage(Message message) {
             try {
-                logger.info("ConfirmationMessageListener.onMessage - current thread: " + Thread.currentThread());
+                logger.log(logLevel, "ConfirmationMessageListener.onMessage - current thread: " + Thread.currentThread());
 
                 if (countDownLatch.getCount() >= 1) {
                     message.acknowledge();
@@ -400,29 +324,33 @@ public class NonPollingResellerFlow {
                     if (message instanceof TextMessage textMessage) {
                         int nextEventCounter = confirmationCounter.incrementAndGet();
                         String msg = textMessage.getText();
-                        logger.info("Received message: " + msg);
-                        logger.info("Complete message: " + textMessage);
+                        logger.log(logLevel, "Received message: " + msg);
+                        logger.log(logLevel, "Complete message: " + textMessage);
                         Confirmation confirmation = Confirmation.fromString(msg);
 
                         UUID uuid = UUID.fromString(textMessage.getJMSCorrelationID());
                         TicketsRequest ticketsRequest =
                                 ticketRequestsByCorrelationId.get(uuid);
 
-                        if (ticketsRequest == null) {
-                            System.out.println("Could not find ticket request for correlation ID " + uuid);
-                        } else {
+                        if (ticketsRequest != null) {
+                            System.out.println();
+                            logger.log(logLevel, "showing confirmations - current thread: " + Thread.currentThread());
+
+                            TicketsRequestConfirmation ticketsRequestConfirmation =
+                                    new TicketsRequestConfirmation(ticketsRequest, confirmation);
+
                             System.out.printf(
                                     "%s (event ID %d; event title: %s)%n",
-                                    confirmation,
-                                    ticketsRequest.eventID(),
-                                    ticketsRequest.title());
+                                    ticketsRequestConfirmation,
+                                    ticketsRequestConfirmation.ticketsRequest().eventID(),
+                                    ticketsRequestConfirmation.ticketsRequest().title());
 
-                            if (confirmation == Confirmation.Accepted) {
+                            if (ticketsRequestConfirmation.confirmation() == Confirmation.Accepted) {
                                 System.out.printf(
                                         "%d tickets secured for event '%s' (event ID %d)!%n",
-                                        ticketsRequest.numberRequested(),
-                                        ticketsRequest.title(),
-                                        ticketsRequest.eventID()
+                                        ticketsRequestConfirmation.ticketsRequest().numberRequested(),
+                                        ticketsRequestConfirmation.ticketsRequest().title(),
+                                        ticketsRequestConfirmation.ticketsRequest().eventID()
                                 );
                             }
                         }
@@ -433,7 +361,7 @@ public class NonPollingResellerFlow {
                     }
                 }
             } catch (JMSException e) {
-                logger.info("Throwing exception (wrapped in JMSRuntimeException): " + e);
+                logger.log(logLevel, "Throwing exception (wrapped in JMSRuntimeException): " + e);
                 throw new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
             }
         }
