@@ -311,7 +311,13 @@ public class NonPollingResellerFlow {
         // Blocking wait for user input. Do not wait too long to answer, or else the server may be down!
         try (Scanner scanner = new Scanner(System.in)) {
             int defaultTicketCount = 10;
-            int numberOfTickets = scanner.hasNextInt() ? scanner.nextInt() : defaultTicketCount;
+            int numberOfTickets;
+            try {
+                numberOfTickets = Integer.parseInt(scanner.next());
+            } catch (RuntimeException e) {
+                logger.info("Ignoring exception while reading from console: " + e);
+                numberOfTickets = defaultTicketCount;
+            }
             return new TicketsRequest(
                     event.eventID,
                     event.title,
