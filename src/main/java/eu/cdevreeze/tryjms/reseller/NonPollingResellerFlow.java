@@ -53,7 +53,7 @@ import java.util.logging.Logger;
  * asynchronous tasks.
  * <p>
  * Secondly, it uses method `CompletableFuture.runAsync`, passing a *single-threaded* `ExecutorService`
- * as second function argument for JMS client code, which is required to be single-threaded. Often,
+ * as second function argument, e.g. for JMS client code, which is required to be single-threaded. Often,
  * these tasks may create and attach a JMS `MessageListener` to a `JMSConsumer`, where the message
  * listener's `onMessage` method runs in yet another thread (under the control of JMS).
  * <p>
