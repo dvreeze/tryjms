@@ -175,6 +175,8 @@ public class NonPollingResellerFlow {
             logger.log(logLevel, "Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         }
+
+        logger.log(logLevel, "FINISHED listening for tickets - current thread: " + Thread.currentThread());
     }
 
     private static void startConfirmationMessageListener(
@@ -196,6 +198,8 @@ public class NonPollingResellerFlow {
             logger.log(logLevel, "Throwing exception (wrapped in RuntimeException): " + e);
             throw new RuntimeException(e);
         }
+
+        logger.log(logLevel, "FINISHED listening for confirmations - current thread: " + Thread.currentThread());
     }
 
     private static void startHandlingEvents(
@@ -239,6 +243,8 @@ public class NonPollingResellerFlow {
             logger.log(logLevel, "Throwing exception (wrapped in JMSRuntimeException): " + e);
             throw new JMSRuntimeException(e.getMessage(), e.getErrorCode(), e);
         }
+
+        logger.log(logLevel, "FINISHED buying tickets - current thread: " + Thread.currentThread());
     }
 
     private static TicketsRequest askForTicketCount(Event event) {
@@ -297,9 +303,18 @@ public class NonPollingResellerFlow {
                                 .documentElement();
                         Event event = Event.fromXmlElement(element);
 
+                        logger.log(
+                                logLevel,
+                                String.format(
+                                        "Putting event with ID %d on internal queue (event counter %d)",
+                                        event.eventID(),
+                                        nextEventCounter
+                                )
+                        );
                         eventQueue.put(event);
 
                         if (nextEventCounter >= MAX_NUMBER_OF_EVENTS) {
+                            logger.log(logLevel, "FINISHED EventMessageListener.onMessage - current thread: " + Thread.currentThread());
                             eventQueue.put(NULL_EVENT);
                             countDownLatch.countDown();
                         }
@@ -338,7 +353,7 @@ public class NonPollingResellerFlow {
                     message.acknowledge();
 
                     if (message instanceof TextMessage textMessage) {
-                        int nextEventCounter = confirmationCounter.incrementAndGet();
+                        int nextConfirmationCounter = confirmationCounter.incrementAndGet();
                         String msg = textMessage.getText();
                         logger.log(logLevel, "Received message: " + msg);
                         logger.log(logLevel, "Complete message: " + textMessage);
@@ -371,7 +386,10 @@ public class NonPollingResellerFlow {
                             }
                         }
 
-                        if (nextEventCounter >= MAX_NUMBER_OF_CONFIRMATIONS) {
+                        logger.log(logLevel, String.format("Confirmation counter: %d", nextConfirmationCounter));
+
+                        if (nextConfirmationCounter >= MAX_NUMBER_OF_CONFIRMATIONS) {
+                            logger.log(logLevel, "FINISHED ConfirmationMessageListener.onMessage - current thread: " + Thread.currentThread());
                             countDownLatch.countDown();
                         }
                     }
